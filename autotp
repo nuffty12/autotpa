@@ -5,7 +5,7 @@ local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 
 local whitelist = {
-    123456789,
+    4635392844,
     379795369
 }
 
