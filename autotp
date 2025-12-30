@@ -1,1 +1,1048 @@
 
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
+
+local whitelist = {
+    123456789,
+    379795369
+}
+
+local function isWhitelisted()
+    for _, id in ipairs(whitelist) do
+        if player.UserId == id then
+            return true
+        end
+    end
+    return false
+end
+
+local function getRobloxGui()
+    local success, gui = pcall(function()
+        return game:GetService("CoreGui")
+    end)
+    
+    if not success then
+        success, gui = pcall(function()
+            return game:GetService("StarterGui")
+        end)
+    end
+    
+    if not success then
+        success, gui = pcall(function()
+            return player:WaitForChild("PlayerGui")
+        end)
+    end
+    
+    return gui
+end
+
+local activeKeys = {}
+local universalKeys = {}
+local userTimers = {}
+local keyDataFile = "MBHubKeys.json"
+local universalKeyFile = "MBHubUniversalKeys.json"
+local userTimersFile = "MBHubUserTimers.json"
+
+local function saveKeys()
+    local success, message = pcall(function()
+        local json = HttpService:JSONEncode(activeKeys)
+        writefile(keyDataFile, json)
+    end)
+    return success
+end
+
+local function saveUniversalKeys()
+    local success, message = pcall(function()
+        local json = HttpService:JSONEncode(universalKeys)
+        writefile(universalKeyFile, json)
+    end)
+    return success
+end
+
+local function saveUserTimers()
+    local success, message = pcall(function()
+        local json = HttpService:JSONEncode(userTimers)
+        writefile(userTimersFile, json)
+    end)
+    return success
+end
+
+local function loadKeys()
+    if isfile(keyDataFile) then
+        local success, result = pcall(function()
+            local content = readfile(keyDataFile)
+            return HttpService:JSONDecode(content)
+        end)
+        if success then
+            return result
+        end
+    end
+    return {}
+end
+
+local function loadUniversalKeys()
+    if isfile(universalKeyFile) then
+        local success, result = pcall(function()
+            local content = readfile(universalKeyFile)
+            return HttpService:JSONDecode(content)
+        end)
+        if success then
+            return result
+        end
+    end
+    return {}
+end
+
+local function loadUserTimers()
+    if isfile(userTimersFile) then
+        local success, result = pcall(function()
+            local content = readfile(userTimersFile)
+            return HttpService:JSONDecode(content)
+        end)
+        if success then
+            return result
+        end
+    end
+    return {}
+end
+
+activeKeys = loadKeys()
+universalKeys = loadUniversalKeys()
+userTimers = loadUserTimers()
+
+local function isKeyValid(key)
+    -- First check normal keys
+    for userId, keyData in pairs(activeKeys) do
+        if keyData.Key == key then
+            if os.time() < keyData.ExpiryTime then
+                return true, userId, "normal"
+            end
+        end
+    end
+    
+    -- Then check universal keys
+    for keyId, keyData in pairs(universalKeys) do
+        if keyData.Key == key then
+            if os.time() < keyData.ExpiryTime then
+                local userIdStr = tostring(player.UserId)
+                -- Check if user already has a timer for this key
+                if userTimers[userIdStr] and userTimers[userIdStr][keyId] then
+                    -- User has timer, check if expired
+                    if os.time() < userTimers[userIdStr][keyId] then
+                        return true, keyId, "universal"
+                    end
+                else
+                    -- User hasn't used this key yet
+                    return true, keyId, "universal"
+                end
+            end
+        end
+    end
+    
+    return false, nil, nil
+end
+
+local function removeExpiredKeys()
+    local updated = false
+    
+    -- Remove expired normal keys
+    for userId, keyData in pairs(activeKeys) do
+        if os.time() >= keyData.ExpiryTime then
+            activeKeys[userId] = nil
+            updated = true
+        end
+    end
+    
+    -- Remove expired universal keys
+    for keyId, keyData in pairs(universalKeys) do
+        if os.time() >= keyData.ExpiryTime then
+            universalKeys[keyId] = nil
+        end
+    end
+    
+    -- Clean up expired user timers
+    for userId, userData in pairs(userTimers) do
+        for keyId, expiryTime in pairs(userData) do
+            if os.time() >= expiryTime then
+                userTimers[userId][keyId] = nil
+            end
+        end
+        if next(userTimers[userId]) == nil then
+            userTimers[userId] = nil
+        end
+    end
+    
+    if updated then saveKeys() end
+    saveUniversalKeys()
+    saveUserTimers()
+end
+
+removeExpiredKeys()
+
+local function checkKeyWhitelist()
+    local userIdStr = tostring(player.UserId)
+    
+    -- Check normal keys
+    if activeKeys[userIdStr] then
+        local keyData = activeKeys[userIdStr]
+        if os.time() < keyData.ExpiryTime then
+            return true
+        else
+            activeKeys[userIdStr] = nil
+            saveKeys()
+        end
+    end
+    
+    -- Check universal key timers
+    if userTimers[userIdStr] then
+        for keyId, expiryTime in pairs(userTimers[userIdStr]) do
+            if os.time() < expiryTime then
+                return true
+            else
+                userTimers[userIdStr][keyId] = nil
+                if next(userTimers[userIdStr]) == nil then
+                    userTimers[userIdStr] = nil
+                end
+                saveUserTimers()
+            end
+        end
+    end
+    
+    return false
+end
+
+local function isWhitelistedFull()
+    if checkKeyWhitelist() then
+        return true
+    end
+    return isWhitelisted()
+end
+
+local function generateRandomKey(length)
+    local characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    local key = ""
+    for i = 1, length do
+        local randomIndex = math.random(1, #characters)
+        key = key .. string.sub(characters, randomIndex, randomIndex)
+    end
+    return key
+end
+
+local function generateKeyWithDuration(duration, isUniversal)
+    local key = generateRandomKey(16)
+    local durationText = ""
+    local durationHours = 0
+    
+    if duration == "1h" then
+        durationText = "1 Hour"
+        durationHours = 1
+    elseif duration == "1d" then
+        durationText = "1 Day"
+        durationHours = 24
+    elseif duration == "7d" then
+        durationText = "7 Days"
+        durationHours = 168
+    elseif duration == "1m" then
+        durationText = "1 Month"
+        durationHours = 720
+    end
+    
+    local expiryTime = os.time() + (durationHours * 3600)
+    
+    if isUniversal then
+        return {
+            Key = key,
+            Duration = durationText,
+            Hours = durationHours,
+            CreationTime = os.time(),
+            ExpiryTime = expiryTime,
+            IsUniversal = true,
+            MaxUses = math.huge
+        }
+    else
+        return {
+            Key = key,
+            Duration = durationText,
+            Hours = durationHours,
+            CreationTime = os.time(),
+            ExpiryTime = expiryTime,
+            IsUniversal = false,
+            MaxUses = 1
+        }
+    end
+end
+
+local function copyToClipboard(text)
+    local success = pcall(function()
+        setclipboard(text)
+    end)
+    return success
+end
+
+local function formatTime(seconds)
+    if seconds <= 0 then return "Expired" end
+    local days = math.floor(seconds / 86400)
+    local hours = math.floor((seconds % 86400) / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local secs = math.floor(seconds % 60)
+    
+    if days > 0 then
+        return string.format("%dd %02dh %02dm", days, hours, minutes)
+    elseif hours > 0 then
+        return string.format("%02dh %02dm %02ds", hours, minutes, secs)
+    else
+        return string.format("%02dm %02ds", minutes, secs)
+    end
+end
+
+local function kickAndReload()
+    local RobloxGui = getRobloxGui()
+    
+    local kickGUI = Instance.new("ScreenGui")
+    kickGUI.Name = "KickNotification"
+    kickGUI.ResetOnSpawn = false
+    kickGUI.Parent = RobloxGui
+    
+    local kickFrame = Instance.new("Frame")
+    kickFrame.Size = UDim2.new(0, 400, 0, 200)
+    kickFrame.Position = UDim2.new(0.5, -200, 0.5, -100)
+    kickFrame.BackgroundColor3 = Color3.fromRGB(30, 20, 40)
+    kickFrame.Parent = kickGUI
+    
+    local kickCorner = Instance.new("UICorner")
+    kickCorner.CornerRadius = UDim.new(0, 12)
+    kickCorner.Parent = kickFrame
+    
+    local kickStroke = Instance.new("UIStroke")
+    kickStroke.Color = Color3.fromRGB(255, 50, 50)
+    kickStroke.Thickness = 3
+    kickStroke.Parent = kickFrame
+    
+    local kickTitle = Instance.new("TextLabel")
+    kickTitle.Size = UDim2.new(1, 0, 0, 60)
+    kickTitle.BackgroundTransparency = 1
+    kickTitle.Text = "KEY EXPIRED"
+    kickTitle.Font = Enum.Font.GothamBold
+    kickTitle.TextSize = 24
+    kickTitle.TextColor3 = Color3.fromRGB(255, 80, 80)
+    kickTitle.Parent = kickFrame
+    
+    local kickMessage = Instance.new("TextLabel")
+    kickMessage.Size = UDim2.new(1, -40, 0, 80)
+    kickMessage.Position = UDim2.new(0, 20, 0, 70)
+    kickMessage.BackgroundTransparency = 1
+    kickMessage.Text = "Your access has expired!\n\nYou will be kicked from the game\nand need to redeem a new key."
+    kickMessage.Font = Enum.Font.Gotham
+    kickMessage.TextSize = 16
+    kickMessage.TextColor3 = Color3.fromRGB(220, 220, 220)
+    kickMessage.TextWrapped = true
+    kickMessage.Parent = kickFrame
+    
+    local countdown = 5
+    local countdownText = Instance.new("TextLabel")
+    countdownText.Size = UDim2.new(1, 0, 0, 30)
+    countdownText.Position = UDim2.new(0, 0, 1, -40)
+    countdownText.BackgroundTransparency = 1
+    countdownText.Text = "Kicking in " .. countdown .. " seconds..."
+    countdownText.Font = Enum.Font.Gotham
+    countdownText.TextSize = 14
+    countdownText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    countdownText.Parent = kickFrame
+    
+    spawn(function()
+        while countdown > 0 do
+            countdownText.Text = "Kicking in " .. countdown .. " seconds..."
+            countdown = countdown - 1
+            wait(1)
+        end
+        
+        -- Kick the player
+        pcall(function()
+            player:Kick("Your key has expired. Please redeem a new key.")
+        end)
+    end)
+end
+
+local RobloxGui = getRobloxGui()
+
+if not isWhitelistedFull() then
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "MBHubWhitelist"
+    gui.ResetOnSpawn = false
+    gui.Parent = RobloxGui
+
+    local blur = Instance.new("BlurEffect")
+    blur.Size = 16
+    blur.Name = "MBHubBlur"
+    blur.Parent = Lighting
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 550, 0, 500)
+    frame.Position = UDim2.new(0.5, -275, 0.5, -250)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    frame.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 18)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(0, 170, 255)
+    stroke.Thickness = 2
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 70)
+    title.BackgroundTransparency = 1
+    title.Text = "MB HUB"
+    title.Font = Enum.Font.GothamBold
+    title.TextScaled = true
+    title.TextColor3 = Color3.fromRGB(0, 170, 255)
+    title.Parent = frame
+
+    local mainText = Instance.new("TextLabel")
+    mainText.Size = UDim2.new(1, -40, 0, 80)
+    mainText.Position = UDim2.new(0, 20, 0, 80)
+    mainText.BackgroundTransparency = 1
+    mainText.Text = "NOT WHITELISTED"
+    mainText.Font = Enum.Font.GothamBold
+    mainText.TextScaled = true
+    mainText.TextColor3 = Color3.fromRGB(255, 80, 80)
+    mainText.Parent = frame
+
+    local subText = Instance.new("TextLabel")
+    subText.Size = UDim2.new(1, -40, 0, 60)
+    subText.Position = UDim2.new(0, 20, 0, 160)
+    subText.BackgroundTransparency = 1
+    subText.Text = "Enter Key or Contact Owner"
+    subText.Font = Enum.Font.Gotham
+    subText.TextScaled = true
+    subText.TextColor3 = Color3.fromRGB(220, 220, 220)
+    subText.Parent = frame
+
+    local keyInputFrame = Instance.new("Frame")
+    keyInputFrame.Size = UDim2.new(1, -40, 0, 50)
+    keyInputFrame.Position = UDim2.new(0, 20, 0, 230)
+    keyInputFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    keyInputFrame.Parent = frame
+
+    local keyInputCorner = Instance.new("UICorner")
+    keyInputCorner.CornerRadius = UDim.new(0, 8)
+    keyInputCorner.Parent = keyInputFrame
+
+    local keyTextBox = Instance.new("TextBox")
+    keyTextBox.Size = UDim2.new(1, -20, 1, -10)
+    keyTextBox.Position = UDim2.new(0, 10, 0, 5)
+    keyTextBox.BackgroundTransparency = 1
+    keyTextBox.PlaceholderText = "Enter Whitelist Key"
+    keyTextBox.Text = ""
+    keyTextBox.Font = Enum.Font.Gotham
+    keyTextBox.TextSize = 16
+    keyTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    keyTextBox.Parent = keyInputFrame
+
+    local keyStatus = Instance.new("TextLabel")
+    keyStatus.Size = UDim2.new(1, -40, 0, 30)
+    keyStatus.Position = UDim2.new(0, 20, 0, 290)
+    keyStatus.BackgroundTransparency = 1
+    keyStatus.Text = ""
+    keyStatus.Font = Enum.Font.Gotham
+    keyStatus.TextSize = 14
+    keyStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
+    keyStatus.Parent = frame
+
+    local activateButton = Instance.new("TextButton")
+    activateButton.Size = UDim2.new(0, 160, 0, 45)
+    activateButton.Position = UDim2.new(0.5, -80, 0, 330)
+    activateButton.BackgroundColor3 = Color3.fromRGB(40, 100, 180)
+    activateButton.Text = "ACTIVATE KEY"
+    activateButton.Font = Enum.Font.GothamBold
+    activateButton.TextSize = 16
+    activateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    activateButton.Parent = frame
+
+    local activateCorner = Instance.new("UICorner")
+    activateCorner.CornerRadius = UDim.new(0, 12)
+    activateCorner.Parent = activateButton
+
+    local instructions = Instance.new("TextLabel")
+    instructions.Size = UDim2.new(1, -40, 0, 100)
+    instructions.Position = UDim2.new(0, 20, 0, 390)
+    instructions.BackgroundTransparency = 1
+    instructions.Text = "Requirements when whitelisted:\n• Hold carpet while stealing\n• Must join first before other person\n• Need to desync before stealing"
+    instructions.Font = Enum.Font.Gotham
+    instructions.TextSize = 14
+    instructions.TextColor3 = Color3.fromRGB(200, 200, 100)
+    instructions.TextWrapped = true
+    instructions.TextXAlignment = Enum.TextXAlignment.Left
+    instructions.Parent = frame
+
+    activateButton.MouseButton1Click:Connect(function()
+        local key = keyTextBox.Text
+        if key == "" then
+            keyStatus.Text = "Please enter a key"
+            keyStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+            return
+        end
+        
+        local isValid, keyId, keyType = isKeyValid(key)
+        if isValid then
+            local userIdStr = tostring(player.UserId)
+            
+            if keyType == "normal" then
+                -- Normal key - transfer to user
+                local keyData = activeKeys[keyId]
+                activeKeys[userIdStr] = keyData
+                activeKeys[keyId] = nil
+                saveKeys()
+                
+                keyStatus.Text = "✓ Key activated! Loading..."
+                keyStatus.TextColor3 = Color3.fromRGB(0, 255, 0)
+                
+            elseif keyType == "universal" then
+                -- Universal key - set user timer
+                local keyData = universalKeys[keyId]
+                
+                -- Initialize user timers if not exists
+                if not userTimers[userIdStr] then
+                    userTimers[userIdStr] = {}
+                end
+                
+                -- Set the user's individual expiry time
+                userTimers[userIdStr][keyId] = keyData.ExpiryTime
+                saveUserTimers()
+                
+                keyStatus.Text = "✓ Universal key activated! Loading..."
+                keyStatus.TextColor3 = Color3.fromRGB(0, 255, 0)
+            end
+            
+            task.wait(2)
+            gui:Destroy()
+            if Lighting:FindFirstChild("MBHubBlur") then
+                Lighting.MBHubBlur:Destroy()
+            end
+            -- Reload the script
+            loadstring(game:HttpGet("https://pastebin.com/raw/YOUR_SCRIPT_HERE", true))()
+        else
+            keyStatus.Text = "✗ Invalid or expired key"
+            keyStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+    end)
+
+    keyTextBox.Focused:Connect(function()
+        keyStatus.Text = ""
+    end)
+
+    local exitButton = Instance.new("TextButton")
+    exitButton.Size = UDim2.new(0, 160, 0, 45)
+    exitButton.Position = UDim2.new(0.5, -80, 1, -60)
+    exitButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    exitButton.Text = "EXIT"
+    exitButton.Font = Enum.Font.GothamBold
+    exitButton.TextSize = 16
+    exitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    exitButton.Parent = frame
+
+    local exitCorner = Instance.new("UICorner")
+    exitCorner.CornerRadius = UDim.new(0, 12)
+    exitCorner.Parent = exitButton
+
+    local exitStroke = Instance.new("UIStroke")
+    exitStroke.Color = Color3.fromRGB(255, 80, 80)
+    exitStroke.Thickness = 1.5
+    exitStroke.Parent = exitButton
+
+    exitButton.MouseButton1Click:Connect(function()
+        gui:Destroy()
+        if Lighting:FindFirstChild("MBHubBlur") then
+            Lighting.MBHubBlur:Destroy()
+        end
+    end)
+else
+    -- Player is whitelisted, load the main script
+    local success, errorMsg = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/DupeSab/DESYNC-UNWALK/refs/heads/main/TOKINU"))()
+    end)
+    
+    if not success then
+        warn("Failed to load desync script:", errorMsg)
+    else
+        print("Desync script loaded successfully")
+    end
+
+    local TweenService = game:GetService("TweenService")
+    local ProximityPromptService = game:GetService("ProximityPromptService")
+    local UserInputService = game:GetService("UserInputService")
+
+    local oldUI = RobloxGui:FindFirstChild("M8HUB_WhitelistedUI")
+    if oldUI then
+        oldUI:Destroy()
+    end
+
+    local M8GUI = Instance.new("ScreenGui")
+    M8GUI.Name = "M8HUB_WhitelistedUI"
+    M8GUI.ResetOnSpawn = false
+    M8GUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    M8GUI.Parent = RobloxGui
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 380, 0, 280)
+    MainFrame.Position = UDim2.new(0.5, -190, 0.5, -140)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    MainFrame.BackgroundTransparency = 0.1
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = M8GUI
+
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+
+    local UIStroke = Instance.new("UIStroke")
+    UIStroke.Parent = MainFrame
+    UIStroke.Color = Color3.fromRGB(0, 170, 255)
+    UIStroke.Thickness = 2
+    UIStroke.Transparency = 0.2
+
+    local UIGradient = Instance.new("UIGradient")
+    UIGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 20, 40)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 30))
+    }
+    UIGradient.Rotation = 90
+    UIGradient.Parent = MainFrame
+
+    MainFrame.Active = true
+    MainFrame.Selectable = true
+
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Size = UDim2.new(1, 0, 0, 40)
+    TitleBar.Position = UDim2.new(0, 0, 0, 0)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
+    TitleBar.BackgroundTransparency = 0.3
+    TitleBar.Parent = MainFrame
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 12)
+    TitleCorner.Parent = TitleBar
+
+    local TitleText = Instance.new("TextLabel")
+    TitleText.Size = UDim2.new(1, 0, 1, 0)
+    TitleText.BackgroundTransparency = 1
+    TitleText.Text = "MB HUB - WHITELISTED"
+    TitleText.Font = Enum.Font.GothamBold
+    TitleText.TextSize = 18
+    TitleText.TextColor3 = Color3.fromRGB(0, 170, 255)
+    TitleText.Parent = TitleBar
+
+    local TimerText = Instance.new("TextLabel")
+    TimerText.Size = UDim2.new(1, -20, 0, 20)
+    TimerText.Position = UDim2.new(0, 10, 0, 45)
+    TimerText.BackgroundTransparency = 1
+    TimerText.Text = "Remaining: Loading..."
+    TimerText.Font = Enum.Font.Gotham
+    TimerText.TextSize = 14
+    TimerText.TextColor3 = Color3.fromRGB(200, 255, 200)
+    TimerText.Parent = MainFrame
+
+    local userIdStr = tostring(player.UserId)
+    
+    -- Start timer countdown
+    spawn(function()
+        while true do
+            local earliestExpiry = nil
+            
+            -- Check normal keys
+            if activeKeys[userIdStr] then
+                local keyData = activeKeys[userIdStr]
+                if keyData.ExpiryTime then
+                    earliestExpiry = keyData.ExpiryTime
+                end
+            end
+            
+            -- Check universal key timers
+            if userTimers[userIdStr] then
+                for keyId, expiryTime in pairs(userTimers[userIdStr]) do
+                    if not earliestExpiry or expiryTime < earliestExpiry then
+                        earliestExpiry = expiryTime
+                    end
+                end
+            end
+            
+            if earliestExpiry then
+                local remaining = earliestExpiry - os.time()
+                if remaining > 0 then
+                    TimerText.Text = "Remaining: " .. formatTime(remaining)
+                else
+                    TimerText.Text = "Key Expired"
+                    TimerText.TextColor3 = Color3.fromRGB(255, 100, 100)
+                    task.wait(2)
+                    kickAndReload()
+                    break
+                end
+            else
+                TimerText.Text = "Permanent Access"
+                TimerText.TextColor3 = Color3.fromRGB(0, 255, 0)
+            end
+            
+            task.wait(1)
+        end
+    end)
+
+    local InstructionsFrame = Instance.new("Frame")
+    InstructionsFrame.Size = UDim2.new(1, -20, 0, 80)
+    InstructionsFrame.Position = UDim2.new(0, 10, 0, 70)
+    InstructionsFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    InstructionsFrame.BackgroundTransparency = 0.5
+    InstructionsFrame.Parent = MainFrame
+
+    local InstructionsCorner = Instance.new("UICorner")
+    InstructionsCorner.CornerRadius = UDim.new(0, 8)
+    InstructionsCorner.Parent = InstructionsFrame
+
+    local InstructionsText = Instance.new("TextLabel")
+    InstructionsText.Size = UDim2.new(1, -10, 1, -10)
+    InstructionsText.Position = UDim2.new(0, 5, 0, 5)
+    InstructionsText.BackgroundTransparency = 1
+    InstructionsText.Text = "WHAT TO DO:\n1. Click SET TP to save position\n2. Use desync (F key)\n3. Hold carpet and steal\n4. Auto-teleports back to saved TP"
+    InstructionsText.Font = Enum.Font.Gotham
+    InstructionsText.TextSize = 14
+    InstructionsText.TextColor3 = Color3.fromRGB(200, 200, 255)
+    InstructionsText.TextWrapped = true
+    InstructionsText.TextXAlignment = Enum.TextXAlignment.Left
+    InstructionsText.Parent = InstructionsFrame
+
+    local StatusText = Instance.new("TextLabel")
+    StatusText.Size = UDim2.new(1, -20, 0, 20)
+    StatusText.Position = UDim2.new(0, 10, 0, 160)
+    StatusText.BackgroundTransparency = 1
+    StatusText.Text = "Status: Listening for steal..."
+    StatusText.Font = Enum.Font.Gotham
+    StatusText.TextSize = 14
+    StatusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    StatusText.Parent = MainFrame
+
+    local TPButton = Instance.new("TextButton")
+    TPButton.Size = UDim2.new(0.4, 0, 0, 35)
+    TPButton.Position = UDim2.new(0.05, 0, 0.85, 0)
+    TPButton.BackgroundColor3 = Color3.fromRGB(40, 100, 180)
+    TPButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TPButton.Text = "SET TP"
+    TPButton.Font = Enum.Font.GothamBold
+    TPButton.TextSize = 14
+    TPButton.Parent = MainFrame
+
+    local TPButtonCorner = Instance.new("UICorner")
+    TPButtonCorner.CornerRadius = UDim.new(0, 8)
+    TPButtonCorner.Parent = TPButton
+
+    local TPButtonStroke = Instance.new("UIStroke")
+    TPButtonStroke.Color = Color3.fromRGB(100, 180, 255)
+    TPButtonStroke.Thickness = 1.5
+    TPButtonStroke.Parent = TPButton
+
+    if player.UserId == 4635392844 then
+        local GenKeyButton = Instance.new("TextButton")
+        GenKeyButton.Size = UDim2.new(0.4, 0, 0, 35)
+        GenKeyButton.Position = UDim2.new(0.55, 0, 0.85, 0)
+        GenKeyButton.BackgroundColor3 = Color3.fromRGB(100, 50, 180)
+        GenKeyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        GenKeyButton.Text = "GEN KEY"
+        GenKeyButton.Font = Enum.Font.GothamBold
+        GenKeyButton.TextSize = 14
+        GenKeyButton.Parent = MainFrame
+
+        local GenKeyCorner = Instance.new("UICorner")
+        GenKeyCorner.CornerRadius = UDim.new(0, 8)
+        GenKeyCorner.Parent = GenKeyButton
+
+        local GenKeyStroke = Instance.new("UIStroke")
+        GenKeyStroke.Color = Color3.fromRGB(180, 100, 255)
+        GenKeyStroke.Thickness = 1.5
+        GenKeyStroke.Parent = GenKeyButton
+
+        GenKeyButton.MouseButton1Click:Connect(function()
+            local GenKeyGUI = Instance.new("ScreenGui")
+            GenKeyGUI.Name = "KeyGeneratorGUI"
+            GenKeyGUI.Parent = RobloxGui
+            
+            local GenFrame = Instance.new("Frame")
+            GenFrame.Size = UDim2.new(0, 350, 0, 320)
+            GenFrame.Position = UDim2.new(0.5, -175, 0.5, -160)
+            GenFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+            GenFrame.Parent = GenKeyGUI
+            
+            local GenCorner = Instance.new("UICorner")
+            GenCorner.CornerRadius = UDim.new(0, 12)
+            GenCorner.Parent = GenFrame
+            
+            local GenTitle = Instance.new("TextLabel")
+            GenTitle.Size = UDim2.new(1, 0, 0, 40)
+            GenTitle.BackgroundTransparency = 1
+            GenTitle.Text = "KEY GENERATOR"
+            GenTitle.Font = Enum.Font.GothamBold
+            GenTitle.TextSize = 20
+            GenTitle.TextColor3 = Color3.fromRGB(180, 100, 255)
+            GenTitle.Parent = GenFrame
+            
+            local keyTypeFrame = Instance.new("Frame")
+            keyTypeFrame.Size = UDim2.new(0.9, 0, 0, 40)
+            keyTypeFrame.Position = UDim2.new(0.05, 0, 0.15, 0)
+            keyTypeFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+            keyTypeFrame.Parent = GenFrame
+            
+            local keyTypeCorner = Instance.new("UICorner")
+            keyTypeCorner.CornerRadius = UDim.new(0, 8)
+            keyTypeCorner.Parent = keyTypeFrame
+            
+            local keyTypeLabel = Instance.new("TextLabel")
+            keyTypeLabel.Size = UDim2.new(0.3, 0, 1, 0)
+            keyTypeLabel.Position = UDim2.new(0, 10, 0, 0)
+            keyTypeLabel.BackgroundTransparency = 1
+            keyTypeLabel.Text = "Key Type:"
+            keyTypeLabel.Font = Enum.Font.Gotham
+            keyTypeLabel.TextSize = 14
+            keyTypeLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+            keyTypeLabel.Parent = keyTypeFrame
+            
+            local keyTypeDropdown = Instance.new("TextButton")
+            keyTypeDropdown.Size = UDim2.new(0.6, 0, 0.7, 0)
+            keyTypeDropdown.Position = UDim2.new(0.35, 0, 0.15, 0)
+            keyTypeDropdown.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+            keyTypeDropdown.Text = "Normal Key"
+            keyTypeDropdown.Font = Enum.Font.Gotham
+            keyTypeDropdown.TextSize = 14
+            keyTypeDropdown.TextColor3 = Color3.fromRGB(255, 255, 255)
+            keyTypeDropdown.Parent = keyTypeFrame
+            
+            local dropdownCorner = Instance.new("UICorner")
+            dropdownCorner.CornerRadius = UDim.new(0, 6)
+            dropdownCorner.Parent = keyTypeDropdown
+            
+            local currentKeyType = "normal"
+            
+            keyTypeDropdown.MouseButton1Click:Connect(function()
+                if currentKeyType == "normal" then
+                    keyTypeDropdown.Text = "Universal Key"
+                    currentKeyType = "universal"
+                else
+                    keyTypeDropdown.Text = "Normal Key"
+                    currentKeyType = "normal"
+                end
+            end)
+            
+            local durations = {"1h", "1d", "7d", "1m"}
+            local durationNames = {"1 Hour", "1 Day", "7 Days", "1 Month"}
+            
+            for i, duration in ipairs(durations) do
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(0.8, 0, 0, 35)
+                btn.Position = UDim2.new(0.1, 0, 0.3 + (i * 0.12), 0)
+                btn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+                btn.Text = durationNames[i]
+                btn.Font = Enum.Font.GothamBold
+                btn.TextSize = 14
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.Parent = GenFrame
+                
+                local btnCorner = Instance.new("UICorner")
+                btnCorner.CornerRadius = UDim.new(0, 8)
+                btnCorner.Parent = btn
+                
+                btn.MouseButton1Click:Connect(function()
+                    local isUniversal = currentKeyType == "universal"
+                    local keyData = generateKeyWithDuration(duration, isUniversal)
+                    
+                    if isUniversal then
+                        local keyId = generateRandomKey(8)
+                        universalKeys[keyId] = keyData
+                        saveUniversalKeys()
+                    else
+                        local tempId = "temp_" .. generateRandomKey(8)
+                        activeKeys[tempId] = keyData
+                        saveKeys()
+                    end
+                    
+                    for _, child in pairs(GenFrame:GetChildren()) do
+                        if child:IsA("TextLabel") and child.Name ~= "GenTitle" then
+                            child:Destroy()
+                        elseif child:IsA("TextButton") and (child.Text == "COPY KEY" or child.Text == "CLOSE") then
+                            child:Destroy()
+                        end
+                    end
+                    
+                    local keyTypeText = isUniversal and "Universal Key (Multi-use)" or "Normal Key (Single-use)"
+                    local keyDisplay = Instance.new("TextLabel")
+                    keyDisplay.Size = UDim2.new(0.8, 0, 0, 80)
+                    keyDisplay.Position = UDim2.new(0.1, 0, 0.8, 0)
+                    keyDisplay.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+                    keyDisplay.Text = "Key: " .. keyData.Key .. "\nType: " .. keyTypeText .. "\nDuration: " .. keyData.Duration .. "\nExpires: " .. os.date("%Y-%m-%d %H:%M", keyData.ExpiryTime)
+                    keyDisplay.Font = Enum.Font.Gotham
+                    keyDisplay.TextSize = 12
+                    keyDisplay.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    keyDisplay.TextWrapped = true
+                    keyDisplay.Parent = GenFrame
+                    
+                    local copyBtn = Instance.new("TextButton")
+                    copyBtn.Size = UDim2.new(0.8, 0, 0, 30)
+                    copyBtn.Position = UDim2.new(0.1, 0, 0.95, -35)
+                    copyBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
+                    copyBtn.Text = "COPY KEY"
+                    copyBtn.Font = Enum.Font.GothamBold
+                    copyBtn.TextSize = 12
+                    copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    copyBtn.Parent = GenFrame
+                    
+                    local copyCorner = Instance.new("UICorner")
+                    copyCorner.CornerRadius = UDim.new(0, 8)
+                    copyCorner.Parent = copyBtn
+                    
+                    copyBtn.MouseButton1Click:Connect(function()
+                        if copyToClipboard(keyData.Key) then
+                            copyBtn.Text = "COPIED!"
+                            task.wait(1)
+                            copyBtn.Text = "COPY KEY"
+                        end
+                    end)
+                    
+                    local closeBtn = Instance.new("TextButton")
+                    closeBtn.Size = UDim2.new(0.8, 0, 0, 30)
+                    closeBtn.Position = UDim2.new(0.1, 0, 0.95, 0)
+                    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+                    closeBtn.Text = "CLOSE"
+                    closeBtn.Font = Enum.Font.GothamBold
+                    closeBtn.TextSize = 12
+                    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    closeBtn.Parent = GenFrame
+                    
+                    local closeCorner = Instance.new("UICorner")
+                    closeCorner.CornerRadius = UDim.new(0, 8)
+                    closeCorner.Parent = closeBtn
+                    
+                    closeBtn.MouseButton1Click:Connect(function()
+                        GenKeyGUI:Destroy()
+                    end)
+                end)
+            end
+            
+            local closeMainBtn = Instance.new("TextButton")
+            closeMainBtn.Size = UDim2.new(0.2, 0, 0, 25)
+            closeMainBtn.Position = UDim2.new(0.8, -10, 0, 5)
+            closeMainBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+            closeMainBtn.Text = "X"
+            closeMainBtn.Font = Enum.Font.GothamBold
+            closeMainBtn.TextSize = 14
+            closeMainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            closeMainBtn.Parent = GenFrame
+            
+            local closeMainCorner = Instance.new("UICorner")
+            closeMainCorner.CornerRadius = UDim.new(0, 8)
+            closeMainCorner.Parent = closeMainBtn
+            
+            closeMainBtn.MouseButton1Click:Connect(function()
+                GenKeyGUI:Destroy()
+            end)
+        end)
+    else
+        local ExitButton = Instance.new("TextButton")
+        ExitButton.Size = UDim2.new(0.4, 0, 0, 35)
+        ExitButton.Position = UDim2.new(0.55, 0, 0.85, 0)
+        ExitButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+        ExitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ExitButton.Text = "EXIT"
+        ExitButton.Font = Enum.Font.GothamBold
+        ExitButton.TextSize = 14
+        ExitButton.Parent = MainFrame
+
+        local ExitButtonCorner = Instance.new("UICorner")
+        ExitButtonCorner.CornerRadius = UDim.new(0, 8)
+        ExitButtonCorner.Parent = ExitButton
+
+        local ExitButtonStroke = Instance.new("UIStroke")
+        ExitButtonStroke.Color = Color3.fromRGB(255, 100, 100)
+        ExitButtonStroke.Thickness = 1.5
+        ExitButtonStroke.Parent = ExitButton
+
+        ExitButton.MouseButton1Click:Connect(function()
+            M8GUI:Destroy()
+        end)
+    end
+
+    local savedCFrame
+
+    TPButton.MouseButton1Click:Connect(function()
+        local character = player.Character
+        if character and character:FindFirstChild("HumanoidRootPart") then
+            savedCFrame = character.HumanoidRootPart.CFrame
+            StatusText.Text = "Status: TP Position Saved!"
+            StatusText.TextColor3 = Color3.fromRGB(0, 255, 0)
+            
+            TPButton.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+            TweenService:Create(TPButton, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(40, 100, 180)}):Play()
+            
+            task.delay(3, function()
+                StatusText.Text = "Status: Listening for steal..."
+                StatusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+            end)
+        end
+    end)
+
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    TitleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    TitleBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input == dragInput then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    ProximityPromptService.PromptButtonHoldEnded:Connect(function(Prompt, PlayerWhoTriggered)
+        if PlayerWhoTriggered == player then
+            if savedCFrame then
+                local character = player.Character
+                if character and character:FindFirstChild("HumanoidRootPart") then
+                    character.HumanoidRootPart.CFrame = savedCFrame
+                    StatusText.Text = "Status: Teleported to saved TP!"
+                    StatusText.TextColor3 = Color3.fromRGB(0, 255, 0)
+                    
+                    TweenService:Create(MainFrame, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(30, 60, 30)}):Play()
+                    task.delay(0.1, function()
+                        TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(20, 20, 30)}):Play()
+                    end)
+                    
+                    task.delay(2, function()
+                        StatusText.Text = "Status: Listening for steal..."
+                        StatusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+                    end)
+                end
+            end
+        end
+    end)
+end
